@@ -75,6 +75,8 @@ export const SEL = {
   promptResultLabel: aid("promptOption"),
   dateMonthDisplay: aid("dateSectionMonth-display"),
   dateYearDisplay: aid("dateSectionYear-display"),
+  /** Workday's message under a date it rejected, e.g. "Error: Invalid Date: 12/" (seen on the live page). */
+  dateErrorText: /invalid date[^A-Za-z]*/i,
 
   /** Month/year date: two spinbutton inputs. */
   dateWrapper: aid("dateInputWrapper"),

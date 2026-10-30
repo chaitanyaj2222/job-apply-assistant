@@ -48,6 +48,13 @@ export const enterField = (el: Element) => moveFocus(el, "in");
 /** Leaves a field so the page commits and validates its value, as clicking elsewhere would. */
 export const leaveField = (el: Element) => moveFocus(el, "out");
 
+/** Sets a value and fires input/change without moving focus (for multi-part widgets left as a whole). */
+export function setValueInPlace(el: ValueElement, value: string): void {
+  nativeValueSetter(el)(value);
+  fire(el, "input");
+  fire(el, "change");
+}
+
 export function setNativeValue(el: ValueElement, value: string): void {
   enterField(el);
   nativeValueSetter(el)(value);
@@ -90,13 +97,22 @@ export function typeText(el: ValueElement, text: string): void {
   if (el.value !== text) throw new FillError(`typing didn't stick (wanted "${text}", got "${el.value}")`);
 }
 
-/** Sends keydown/keyup for a named key ("Enter", "Escape", "ArrowDown") the way a keyboard would. */
+const NAMED_KEY_CODES: Record<string, number> = { Enter: 13, Escape: 27, ArrowDown: 40, Tab: 9, Backspace: 8 };
+
+/**
+ * Sends keydown(/keypress)/keyup for a named key ("Enter", "Escape", "ArrowDown") or a single
+ * character ("7"), the way a keyboard would. Does not change the value itself: widgets that build
+ * their value from key presses (Workday's date sections) handle that.
+ */
 export function pressKey(el: Element, key: string): void {
   const win = el.ownerDocument.defaultView;
   const KeyEv = win?.KeyboardEvent ?? KeyboardEvent;
-  const keyCode = { Enter: 13, Escape: 27, ArrowDown: 40, Tab: 9 }[key] ?? 0;
-  const init = { key, code: key, keyCode, which: keyCode, bubbles: true, cancelable: true, composed: true };
+  const isChar = key.length === 1;
+  const keyCode = NAMED_KEY_CODES[key] ?? (isChar ? key.toUpperCase().charCodeAt(0) : 0);
+  const code = isChar ? (/\d/.test(key) ? `Digit${key}` : `Key${key.toUpperCase()}`) : key;
+  const init = { key, code, keyCode, which: keyCode, bubbles: true, cancelable: true, composed: true };
   el.dispatchEvent(new KeyEv("keydown", init));
+  if (isChar) el.dispatchEvent(new KeyEv("keypress", { ...init, charCode: keyCode }));
   el.dispatchEvent(new KeyEv("keyup", init));
 }
 

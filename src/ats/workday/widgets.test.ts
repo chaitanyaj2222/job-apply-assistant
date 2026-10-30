@@ -303,23 +303,65 @@ describe("fillPrompt (Skills)", () => {
 });
 
 describe("fillMonthYear", () => {
-  beforeEach(() => {
-    load(myExperienceHtml);
-    // Stand-in for Workday re-rendering the visible date sections from the inputs.
-    for (const wrapper of document.querySelectorAll('[data-automation-id="dateInputWrapper"]')) {
-      for (const part of ["Month", "Year"] as const) {
-        const input = wrapper.querySelector<HTMLInputElement>(`[data-automation-id="dateSection${part}-input"]`)!;
-        const display = wrapper.querySelector(`[data-automation-id="dateSection${part}-display"]`)!;
-        input.addEventListener("input", () => (display.textContent = part === "Month" ? input.value.padStart(2, "0") : input.value));
-      }
+  /**
+   * Stand-in for Workday's date widget on "From" of Work Experience 2. "keys": the value is built from
+   * digit key presses (month auto-advances to year), as on the live page; "values": it reads the inputs'
+   * values instead; "reject": like "values" but every date is refused. Leaving the date validates the
+   * whole thing and shows "Error: Invalid Date: m/y" when incomplete.
+   */
+  function simulateDate(mode: "keys" | "values" | "reject") {
+    const wrapper = findContainer(document, "workExperience-791--startDate")!;
+    const monthInput = wrapper.querySelector<HTMLInputElement>('[data-automation-id="dateSectionMonth-input"]')!;
+    const yearInput = wrapper.querySelector<HTMLInputElement>('[data-automation-id="dateSectionYear-input"]')!;
+    const monthShown = wrapper.querySelector('[data-automation-id="dateSectionMonth-display"]')!;
+    const yearShown = wrapper.querySelector('[data-automation-id="dateSectionYear-display"]')!;
+    const state = { m: "", y: "" };
+    const render = () => {
+      monthInput.value = state.m ? String(Number(state.m)) : "";
+      monthShown.textContent = state.m.padStart(2, "0");
+      yearInput.value = state.y;
+      yearShown.textContent = state.y;
+    };
+    if (mode === "keys") {
+      monthInput.addEventListener("keydown", (e) => {
+        if (!/^\d$/.test(e.key)) return;
+        e.preventDefault();
+        state.m = (state.m + e.key).slice(-2);
+        render();
+        if (state.m.length === 2) yearInput.focus();
+      });
+      yearInput.addEventListener("keydown", (e) => {
+        if (!/^\d$/.test(e.key)) return;
+        e.preventDefault();
+        state.y = (state.y + e.key).slice(-4);
+        render();
+      });
+    } else {
+      monthInput.addEventListener("input", () => ((state.m = monthInput.value), render()));
+      yearInput.addEventListener("input", () => ((state.y = yearInput.value), render()));
     }
-  });
+    wrapper.addEventListener("focusout", (e) => {
+      if (wrapper.contains((e as FocusEvent).relatedTarget as Node | null)) return;
+      wrapper.querySelector(".err")?.remove();
+      const ok = mode !== "reject" && Number(state.m) >= 1 && Number(state.m) <= 12 && state.y.length === 4;
+      if (!ok) wrapper.insertAdjacentHTML("beforeend", `<div class="err">Error: Invalid Date: ${state.m}/${state.y}</div>`);
+    });
+    return wrapper;
+  }
 
-  it("sets month and year and checks the rendered display", async () => {
-    const container = findContainer(document, "workExperience-791--startDate")!;
-    await expect(fillMonthYear(container, "03/2020", FAST)).resolves.toBe("filled");
+  beforeEach(() => load(myExperienceHtml));
+
+  it.each(["keys", "values"] as const)("enters the date so the page accepts it (%s)", async (mode) => {
+    const wrapper = simulateDate(mode);
+    await expect(fillMonthYear(wrapper, "03/2020", FAST)).resolves.toBe("filled");
+    expect(wrapper.textContent).not.toMatch(/invalid date/i);
     const field = extractFields(document, "myExperience").find((f) => f.id === "workExperience-791--startDate")!;
     expect(field.value).toBe("03/2020");
+  });
+
+  it("reports a date Workday rejects instead of claiming success", async () => {
+    const wrapper = simulateDate("reject");
+    await expect(fillMonthYear(wrapper, "03/2020", FAST)).rejects.toThrow(/Workday rejected the date \(Invalid Date: 3\/2020\)/);
   });
 
   it("rejects malformed dates", async () => {

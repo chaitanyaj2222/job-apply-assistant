@@ -3,7 +3,7 @@
 // safeClick, and each filler verifies the page actually shows the new value before returning.
 
 import { cleanText } from "../../core/extract";
-import { FillError, leaveField, pressKey, setNativeValue, typeText, waitFor } from "../../core/fill";
+import { enterField, FillError, leaveField, pressKey, setValueInPlace, typeText, waitFor } from "../../core/fill";
 import { safeClick } from "../../core/safety";
 import { bestMatch, normalize } from "../../core/text";
 import { SEL } from "./selectors";
@@ -293,26 +293,46 @@ export async function fillPrompt(container: Element, wanted: string | string[], 
 
 // ---- Month/year date ---------------------------------------------------------------------------
 
-/** Fills a "MM/YYYY" date. Verified against the rendered display, not just the input we set. */
+/**
+ * Fills a "MM/YYYY" date. Workday builds the date from key presses (typing the month moves on to the
+ * year), so it is typed like a user; if key presses don't register, both parts are set directly.
+ * The date is left only once both parts are in (leaving after the month alone gets "Invalid Date: 12/"),
+ * and Workday's own error text is checked afterwards.
+ */
 export async function fillMonthYear(container: Element, wanted: string, opts: WidgetOptions = {}): Promise<WidgetOutcome> {
   const timeout = opts.timeoutMs ?? 2000;
   const m = /^(\d{1,2})\/(\d{4})$/.exec(wanted.trim());
   if (!m) throw new FillError(`not a MM/YYYY date: "${wanted}"`);
-  const [month, year] = [String(Number(m[1])), m[2]!];
+  const month = m[1]!.padStart(2, "0");
+  const year = m[2]!;
+  const doc = container.ownerDocument;
 
   const monthInput = container.querySelector<HTMLInputElement>(SEL.dateMonthInput);
   const yearInput = container.querySelector<HTMLInputElement>(SEL.dateYearInput);
   if (!monthInput || !yearInput) throw new FillError("date inputs not found");
 
-  setNativeValue(monthInput, month);
-  setNativeValue(yearInput, year);
-
   const display = (sel: string) => cleanText(container.querySelector(sel));
-  const shown = await settle(
-    container.ownerDocument,
-    () => Number(display(SEL.dateMonthDisplay)) === Number(month) && display(SEL.dateYearDisplay) === year,
-    timeout,
-  );
+  const shows = () => Number(display(SEL.dateMonthDisplay)) === Number(month) && display(SEL.dateYearDisplay) === year;
+
+  // 1) Type it: month digits, then year digits, without leaving in between.
+  enterField(monthInput);
+  for (const d of month) pressKey(monthInput, d);
+  enterField(yearInput);
+  for (const d of year) pressKey(yearInput, d);
+  let shown = await settle(doc, shows, Math.min(timeout, 1000));
+
+  // 2) Key presses didn't register: set both parts, still without leaving in between.
+  if (!shown) {
+    setValueInPlace(monthInput, String(Number(month)));
+    setValueInPlace(yearInput, year);
+    shown = await settle(doc, shows, timeout);
+  }
+
+  // Leave the date as a whole so Workday validates the complete value.
+  leaveField(yearInput);
   if (!shown) throw new FillError("the date didn't take; enter it yourself");
+
+  const rejected = await settle(doc, () => SEL.dateErrorText.test(cleanText(container)), 300);
+  if (rejected) throw new FillError(`Workday rejected the date (${cleanText(container).match(SEL.dateErrorText)?.[0] ?? "invalid"}); re-type it yourself`);
   return "filled";
 }
